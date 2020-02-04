@@ -1,0 +1,1520 @@
+---
+title: "Sagebrush Nitrogen Fertilization: Data Analysis"
+author: "Christopher W. Beltz"
+date: "5/06/2019"
+output: pdf_document
+abstract: Initial data analysis for "Nitrogen addition pulse has minimal effect in Wyoming big sagebrush (Artemisia tridentata) communities on the Pinedale Anticline in Wyoming (USA)" (2019). Data analysis was conducted under R version 3.5.3. File created on 2018-07-29. Files last updated on 2019-05-06. All packages were updated as of 2019-05-01.
+---
+
+##Set-Up
+
+```{r, eval=F, echo=F}
+#install packages, only if needed
+install.packages("knitr")
+install.packages("tidyverse")
+install.packages("lubridate")
+install.packages("plotrix")
+install.packages("ecodist")
+install.packages("labdsv")
+install.packages("emmeans")
+install.packages("nlme")
+install.packages("vegan")
+install.packages("Rmisc")
+install.packages("soiltexture")
+install.packages("here")
+```
+
+
+Report R version:
+
+```{r}
+R.version
+```
+
+
+Load Packages:
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+load.pkg <- c("knitr",
+              "tidyverse",
+              "lubridate", 
+              "plotrix",
+              "ecodist",
+              "labdsv",
+              "emmeans",
+              "nlme",
+              "vegan",
+              "soiltexture", #v1.4.6 generates an error in newer versions of R
+              "here") #'here' pkg must be loaded after lubridate
+              
+#NOTE: The `Rmisc` package will not be loaded, as it conflicts with `here`. However it will be used in some of the soil N analyses and called directly using "Rmisc::...".
+
+lapply(load.pkg, require, character.only = TRUE)
+```
+
+
+Report package version:
+
+```{r}
+lapply(load.pkg, packageVersion)
+
+rm(load.pkg)
+```
+
+
+Read in data from cleaned CSVs in "3_Data.Entry":
+
+```{r}
+#here() uses a package to set a reproducible working directory
+here()
+
+Length.Inflor <- read.csv(here("3_Data.Entry", "CSV_Cleaned",  "Beltz_2018_Sagebrush.N.Fertilization_Inflor.Length_CLEAN.csv"), as.is = TRUE)
+
+Length.Leader <- read.csv(here("3_Data.Entry", "CSV_Cleaned", "Beltz_2018_Sagebrush.N.Fertilization_Leader.Length_CLEAN.csv"), as.is = TRUE)
+
+Veg.Com <- read.csv(here("3_Data.Entry", "CSV_Cleaned", "Beltz_2018_Sagebrush.N.Fertilization_Plant.Community_CLEAN.csv"), as.is = TRUE)
+
+Soil.N <- read.csv(here("3_Data.Entry", "CSV_Cleaned", "Beltz_2018_Sagebrush.N.Fertilization_Soil.N_CLEAN.csv"), as.is = TRUE)
+
+CandN.Leaders <- read.csv(here("3_Data.Entry", "CSV_Cleaned", "Beltz_2018_Sagebrush.N.Fertilization_CandN.Leaders_CLEAN.csv"), as.is = TRUE)
+
+CandN.Hay <- read.csv(here("3_Data.Entry", "CSV_Cleaned", "Beltz_2018_Sagebrush.N.Fertilization_CandN.Hay_CLEAN.csv"), as.is = TRUE)
+
+Text.Soil <- read.csv(here("3_Data.Entry", "CSV_Cleaned", "Beltz_2018_Sagebrush.N.Fertilization_Soil.Texture_CLEAN.csv"), as.is = TRUE)
+
+TGas.13 <- read.csv(here("3_Data.Entry", "CSV_Cleaned", "Beltz_2018_Sagebrush.N.Fertilization_Trace.Gas.13_CLEAN.csv"), as.is = TRUE)
+```
+
+
+\pagebreak
+
+
+
+## Aggregate/pool data to the ranch/site and treatment level (n=45).
+
+Join soil N and soil texture dataframes:
+
+```{r}
+Sage.N.Fert <- merge(Soil.N, Text.Soil, by=c("Site.ID"))
+
+#re-order columns
+Sage.N.Fert <- Sage.N.Fert[,c(2,1,3:6,20,17:19,7:16)]
+
+#remove soil N and soil texture dataframes
+rm(Soil.N,Text.Soil)
+```
+
+
+Aggregate/pool C and N content for leaders:
+
+```{r}
+#don't include rep #2, as only run for some samples to confirm accuracy/precision
+tmp.CandN <- CandN.Leaders[CandN.Leaders$Rep != 2,] %>% group_by(Site.Trt.Code) %>% summarise_at(c("d15N", "d13C", "Wt.N_per", "Wt.C_per", "C.N_ratio" ), mean)
+
+Sage.N.Fert <- merge(Sage.N.Fert, tmp.CandN, by=c("Site.Trt.Code"))
+
+rm(tmp.CandN, CandN.Leaders)
+```
+
+
+Aggregate leader and infloresence data:
+
+```{r}
+tmp.Inflor <- Length.Inflor %>% 
+  group_by(Site.Trt.Code) %>% summarise_at("Inflor.Length_cm", mean, na.rm=T)
+
+tmp.Leader <- Length.Leader %>% 
+  group_by(Site.Trt.Code) %>% summarise_at("Leader.Length_cm", mean, na.rm=T)
+
+tmp.Mass <- Length.Leader %>% 
+  group_by(Site.Trt.Code) %>% summarise_at("Dry.Mass_g", mean, na.rm=T)
+
+Sage.N.Fert <- merge(Sage.N.Fert, tmp.Inflor, by=c("Site.Trt.Code"))
+Sage.N.Fert <- merge(Sage.N.Fert, tmp.Leader, by=c("Site.Trt.Code"))
+Sage.N.Fert <- merge(Sage.N.Fert, tmp.Mass, by=c("Site.Trt.Code"))
+
+rm(tmp.Inflor, tmp.Leader, tmp.Mass, Length.Inflor, Length.Leader)
+```
+
+
+Add species richness and total cover to Pinedale aggredated data:
+
+```{r}
+#calculate species richness
+tmp.Species1 <- Veg.Com %>% group_by(Site.Trt.Code, Species.Code) %>% count(Species.Code)
+tmp.Species1 <- tmp.Species1 %>% group_by(Site.Trt.Code) %>% count(Site.Trt.Code)
+
+colnames(tmp.Species1) <- c("Site.Trt.Code", "Species.Rich_num")
+
+#calculate sum of total cover by Daubenmire square
+tmp.Cover <- Veg.Com %>% 
+  group_by(Site.Trt.Code, Daubenmire.Num) %>% summarise_at("Canopy.Cover.Midpoint_per", sum, na.rm=T)
+
+#average Daubenmire square total cover to get mean cover per treatment block
+tmp.Cover <- tmp.Cover %>% 
+  group_by(Site.Trt.Code) %>% summarise_at("Canopy.Cover.Midpoint_per", mean, na.rm=T)
+
+Sage.N.Fert <- merge(Sage.N.Fert, tmp.Species1, by=c("Site.Trt.Code"), all=T)
+Sage.N.Fert <- merge(Sage.N.Fert, tmp.Cover, by=c("Site.Trt.Code"), all=T)
+
+colnames(Sage.N.Fert)[30] <- "Total.Cover_per"
+
+rm(tmp.Cover, tmp.Species1)
+```
+
+
+#### Calculate Trace Gas Fluxes & Add to Aggregated Data
+
+Calculate change in gas concentration for both dates in July 2013:
+
+```{r}
+#create dataframe
+Flux_TGas <- data.frame(matrix(vector(), 180, 15, dimnames=list(c(), c("Date.ABV", "Collar.ID", "Site.Trt.Code", "Air.Pressure_Pa", "Temp_K", "Chamber.Height_cm", "CO2_coef", "CO2_rsq", "CO2.Flux_mg.m2.hr", "CH4_coef", "CH4_rsq", "CH4.Flux_mg.m2.hr", "N2O_coef", "N2O_rsq", "N2O.Flux_mg.m2.hr"))), stringsAsFactors=F)
+```
+
+
+```{r, echo=F}
+#calculate flux rate in parts per million
+b <- 1
+
+for (date in unique(TGas.13$Date.ABV)) {
+  #print(date)
+  
+  for (collar in unique(TGas.13$Collar.ID)) {
+    #print(collar)
+    
+    Flux_TGas$Date.ABV[b] <- date
+    Flux_TGas$Collar.ID[b] <- collar
+    
+    #add air pressure in Pascals (Pa)
+    #average daily pressure (mmHg) obtained from Ralph Wenz Airfield for Pinedale, WY
+    #2Jul2013 23.4 in ; 25Jul2013 23.3 in
+    Flux_TGas$Air.Pressure_Pa[b] <- ifelse(date=="2Jul13", 23.4*3386.39, 23.3*3386.39)
+    
+    unique(Flux_TGas$Date.ABV)
+    
+    #calculate mean temperature for each specific measurement
+    tmp_temp.F <- mean(TGas.13$Start.Temp_F[TGas.13$Date.ABV==date & TGas.13$Collar.ID==collar] + TGas.13$End.Temp_F[TGas.13$Date.ABV==date & TGas.13$Collar.ID==collar])
+    
+    #convert temperature from Fahrenheit to Kelvin
+    Flux_TGas$Temp_K[b] <- (tmp_temp.F + 459.67)*5/9
+    
+    #calculate mean collar height
+    Flux_TGas$Chamber.Height_cm[b] <- (TGas.13$Chamber.Height.1_cm[TGas.13$Date.ABV==date & TGas.13$Collar.ID==collar & TGas.13$Time.Elapsed_min==0] + TGas.13$Chamber.Height.3_cm[TGas.13$Date.ABV==date & TGas.13$Collar.ID==collar & TGas.13$Time.Elapsed_min==0] + TGas.13$Chamber.Height.3_cm[TGas.13$Date.ABV==date & TGas.13$Collar.ID==collar & TGas.13$Time.Elapsed_min==0])/3
+    
+    #calculate flux of CO2
+    if(sum(is.na(TGas.13$CO2_ppm[TGas.13$Date.ABV==date & TGas.13$Collar.ID==collar]))<2){
+      
+      tmp_lm.mod.CO2 <- lm(CO2_ppm ~ Time.Elapsed_min, data=subset(TGas.13, Date.ABV==date & Collar.ID==collar))
+      
+      Flux_TGas$CO2_coef[b] <- summary(tmp_lm.mod.CO2)$coefficients[2]
+      Flux_TGas$CO2_rsq[b] <- summary(tmp_lm.mod.CO2)$r.squared
+      
+    } else {
+      
+      Flux_TGas$CO2_coef[b] <- NA
+      Flux_TGas$CO2_rsq[b] <- NA
+      
+    }
+    
+    
+    #calculate flux of CH4
+    if(sum(is.na(TGas.13$CH4_ppm[TGas.13$Date.ABV==date & TGas.13$Collar.ID==collar]))<2){
+      
+      tmp_lm.mod.CH4 <- lm(CH4_ppm ~ Time.Elapsed_min, data=subset(TGas.13, Date.ABV==date & Collar.ID==collar))
+      
+      Flux_TGas$CH4_coef[b] <- summary(tmp_lm.mod.CH4)$coefficients[2]
+      Flux_TGas$CH4_rsq[b] <- summary(tmp_lm.mod.CH4)$r.squared
+      
+    } else {
+      
+      Flux_TGas$CH4_coef[b] <- NA
+      Flux_TGas$CH4_rsq[b] <- NA
+      
+    }
+    
+    
+      #calculate flux of N2O
+    if(sum(is.na(TGas.13$N2O_ppm[TGas.13$Date.ABV==date & TGas.13$Collar.ID==collar]))<2){
+      
+      tmp_lm.mod.N2O <- lm(N2O_ppm ~ Time.Elapsed_min, data=subset(TGas.13, Date.ABV==date & Collar.ID==collar))
+      
+      Flux_TGas$N2O_coef[b] <- summary(tmp_lm.mod.N2O)$coefficients[2]
+      Flux_TGas$N2O_rsq[b] <- summary(tmp_lm.mod.N2O)$r.squared
+      
+    } else {
+      
+      Flux_TGas$N2O_coef[b] <- NA
+      Flux_TGas$N2O_rsq[b] <- NA
+      
+    }
+    
+    b <- b+1
+    
+  }
+  
+}
+
+head(Flux_TGas)
+
+rm(b, collar, date, tmp_temp.F, tmp_lm.mod.CH4, tmp_lm.mod.CO2, tmp_lm.mod.N2O)
+```
+
+
+Convert fluxes from parts per million (ppm) to mg m^-2 hr^-1:
+
+```{r}
+#use Ideal Gas Law (PV=nRT ; n=PV/RT)
+#P=pressure in Pascals (Pa)
+#V=chamber volume in m^3
+#R=8.31441 J K^-1 mol^-1
+#T=air temperature in Kelvin (K)
+
+#calculate moles of gas in chamber
+tmp.PVNRT <- (Flux_TGas$Air.Pressure_Pa*((Flux_TGas$Chamber.Height_cm*(pi*10^2))/1000000))/(8.31441*Flux_TGas$Temp_K)
+
+#convert fluxes from ppm to milligrams of specific gas
+tmp.CO2 <- tmp.PVNRT*(Flux_TGas$CO2_coef/10000)*(44.01*1000)
+tmp.CH4 <- tmp.PVNRT*(Flux_TGas$CH4_coef/10000)*(16.04*1000)
+tmp.N2O <- tmp.PVNRT*(Flux_TGas$N2O_coef/10000)*(44.01*1000)
+
+#current fluxes are per 314cm^2 (i.e. pi*10^2) of soil surface and over 30min
+#convert to per 1m^2 and over 1hr
+
+Flux_TGas$CO2.Flux_mg.m2.hr <- tmp.CO2*(10000/(pi*10^2))*(60/30)
+Flux_TGas$CH4.Flux_mg.m2.hr <- tmp.CH4*(10000/(pi*10^2))*(60/30)
+Flux_TGas$N2O.Flux_mg.m2.hr <- tmp.N2O*(10000/(pi*10^2))*(60/30)
+
+rm(tmp.PVNRT, tmp.CO2, tmp.CH4, tmp.N2O, TGas.13)
+```
+
+
+Average fluxes from both collars by treatment block for each date:
+
+```{r}
+#extract site/treatment code from collar ID
+Flux_TGas$Site.Trt.Code <- str_sub(Flux_TGas$Collar.ID, start=1, end=5)
+
+Flux_TGas <- Flux_TGas %>% group_by(Date.ABV, Site.Trt.Code) %>% summarise_at(c("CO2.Flux_mg.m2.hr", "CH4.Flux_mg.m2.hr", "N2O.Flux_mg.m2.hr"), mean, na.rm=T)
+```
+
+
+Add trace gas fluxes to aggregated data frame:
+
+```{r}
+Flux_2Jul13 <- subset(Flux_TGas, Date.ABV=="2Jul13")
+Flux_25Jul13 <- subset(Flux_TGas, Date.ABV=="25Jul13")
+
+Sage.N.Fert <- merge(Sage.N.Fert, Flux_2Jul13, by="Site.Trt.Code")
+colnames(Sage.N.Fert)[32:34] <- c("CO2.Flux_mg.m2.hr_2Jul13", "CH4.Flux_mg.m2.hr_2Jul13", "N2O.Flux_mg.m2.hr_2Jul13")
+Sage.N.Fert <- Sage.N.Fert[,-31]
+
+Sage.N.Fert <- merge(Sage.N.Fert, Flux_25Jul13, by="Site.Trt.Code")
+colnames(Sage.N.Fert)[35:37] <- c("CO2.Flux_mg.m2.hr_25Jul13", "CH4.Flux_mg.m2.hr_25Jul13", "N2O.Flux_mg.m2.hr_25Jul13")
+Sage.N.Fert <- Sage.N.Fert[,-34]
+
+rm(Flux_2Jul13, Flux_25Jul13, Flux_TGas)
+```
+
+
+####Re-order & Re-name
+
+```{r}
+#make Site a unique variable by combining Ranch Code + Site Number
+colnames(Sage.N.Fert)[4] <- "Site.Code"
+Sage.N.Fert$Site.Code <- paste(Sage.N.Fert$Ranch.Code, Sage.N.Fert$Site.Code, sep='')
+
+#make Plot a unique variable by combing Ranch, Site, and Plot code
+Sage.N.Fert$Plot.Code <- paste(Sage.N.Fert$Site.Code, Sage.N.Fert$Plot.Code, sep='')
+
+#remove Site ID column as it is redundant
+drops <- c("Site.ID")
+
+Sage.N.Fert <- Sage.N.Fert[ , !(names(Sage.N.Fert) %in% drops)]
+
+rm(drops)
+```
+
+
+\pagebreak
+
+
+
+## Data Check
+
+Check data structure:
+
+```{r}
+str(Sage.N.Fert)
+str(CandN.Hay)
+str(Veg.Com)
+```
+
+
+Check for range and NAs:
+
+```{r}
+summary(Sage.N.Fert)
+summary(CandN.Hay)
+summary(Veg.Com)
+```
+
+*3 NAs per variable are appropriate, where they occur.*
+
+
+\pagebreak
+
+
+
+##Soil Texture
+
+Plot soil texture triangle:
+
+```{r}
+TT.plot(
+  class.sys = "USDA.TT",
+  tri.data = data.frame(CLAY=Sage.N.Fert$clay_per, SILT=Sage.N.Fert$silt_per,
+                        SAND=Sage.N.Fert$sand_per),
+  main = "Soil Texture for All Plots (0-10cm)"
+  )
+```
+
+
+\pagebreak
+
+
+
+## Soil Nitrogen for 2012-13 & 2014-15
+
+#### 2012-13 (Cusp):
+
+```{r}
+#Total N
+mod1.TotalN <- list()
+mod1.TotalN[["lme"]] <- list()
+
+mod1.TotalN[["lme"]][["wo"]] <- nlme::lme(Total.N.2013.Cusp_ug.10cm2.buriallength ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod1.TotalN[["lme"]], anova)
+
+summary(nlme::lme(Total.N.2013.Cusp_ug.10cm2.buriallength ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod1.TotalN[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#N03
+mod1.NO3 <- list()
+mod1.NO3[["lme"]] <- list()
+
+mod1.NO3[["lme"]][["wo"]] <- nlme::lme(NO3.N.2013.Cusp_ug.10cm2.buriallength ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod1.NO3[["lme"]], anova)
+
+summary(nlme::lme(NO3.N.2013.Cusp_ug.10cm2.buriallength ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod1.NO3[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#NH4
+mod1.NH4 <- list()
+mod1.NH4[["lme"]] <- list()
+
+mod1.NH4[["lme"]][["wo"]] <- nlme::lme(NH4.N.2013.Cusp_ug.10cm2.buriallength ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod1.NH4[["lme"]], anova)
+
+summary(nlme::lme(NH4.N.2013.Cusp_ug.10cm2.buriallength ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod1.NH4[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+rm(mod1.TotalN, mod1.NO3, mod1.NH4)
+```
+
+
+#### 2014-15 (Interspace & Under Canopy)
+
+```{r}
+#Total N Interspace
+mod2i.TotalN <- list()
+mod2i.TotalN[["lme"]] <- list()
+
+mod2i.TotalN[["lme"]][["wo"]] <- nlme::lme(Total.N.2015.Int_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod2i.TotalN[["lme"]], anova)
+
+summary(nlme::lme(Total.N.2015.Int_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod2i.TotalN[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#NO3 Interspace
+mod2i.NO3 <- list()
+mod2i.NO3[["lme"]] <- list()
+
+mod2i.NO3[["lme"]][["wo"]] <- nlme::lme(NO3.N.2015.Int_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod2i.NO3[["lme"]], anova)
+
+summary(nlme::lme(NO3.N.2015.Int_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod2i.NO3[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#NH4 Interspace
+mod2i.NH4 <- list()
+mod2i.NH4[["lme"]] <- list()
+
+mod2i.NH4[["lme"]][["wo"]] <- nlme::lme(NH4.N.2015.Int_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod2i.NH4[["lme"]], anova)
+
+summary(nlme::lme(NH4.N.2015.Int_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod2i.NH4[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#Total N Under Canopy
+mod2u.TotalN <- list()
+mod2u.TotalN[["lme"]] <- list()
+
+mod2u.TotalN[["lme"]][["wo"]] <- nlme::lme(Total.N.2015.Und_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod2u.TotalN[["lme"]], anova)
+
+summary(nlme::lme(Total.N.2015.Und_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod2u.TotalN[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#NO3 Under Canopy
+mod2u.NO3 <- list()
+mod2u.NO3[["lme"]] <- list()
+
+mod2u.NO3[["lme"]][["wo"]] <- nlme::lme(NO3.N.2015.Und_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod2u.NO3[["lme"]], anova)
+
+summary(nlme::lme(NO3.N.2015.Und_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod2u.NO3[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#NH4 Under Canopy
+mod2u.NH4 <- list()
+mod2u.NH4[["lme"]] <- list()
+
+mod2u.NH4[["lme"]][["wo"]] <- nlme::lme(NH4.N.2015.Und_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod2u.NH4[["lme"]], anova)
+
+summary(nlme::lme(NH4.N.2015.Und_ug.10cm2.230day ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod2u.NH4[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+rm(mod2i.TotalN, mod2i.NO3, mod2i.NH4, mod2u.TotalN, mod2u.NO3, mod2u.NH4)
+```
+
+
+####Percent NO3 in Total N
+
+Calculate percent NO3-N of Total-N:
+
+```{r}
+#re-organize data for graphing histograms by group
+per.N.in.TotalN <- gather(Sage.N.Fert, "sampling", "N.content", 12:20)
+
+#summarize N, means, standard deviations, standard error, and 95% CI
+per.N.in.TotalN <- Rmisc::summarySE(per.N.in.TotalN, measurevar="N.content", groupvars=c("sampling", "Trt.Code"))
+
+#create temporary vector for percent of total N
+perN.tmp <- rep(NA, 27)
+
+#calculate percent of total N for each row
+for(i in 1:nrow(per.N.in.TotalN)) {
+  if (i<=9){
+    perN.tmp[i] <- per.N.in.TotalN$N.content[i]/per.N.in.TotalN$N.content[i+18]
+  }
+  if (i<=18 & i>9){
+    perN.tmp[i] <- per.N.in.TotalN$N.content[i]/per.N.in.TotalN$N.content[i+9]
+  }
+  if (i<=27 & i>18){
+    perN.tmp[i] <- per.N.in.TotalN$N.content[i]/per.N.in.TotalN$N.content[i]
+  }
+}
+
+#add percents of total N to dataframe
+per.N.in.TotalN$per.N.in.TotalN <- perN.tmp
+
+per.N.in.TotalN
+
+rm(i)
+```
+
+
+```{r}
+#create dataframe for displaying means and standard deviation of NO3-N percentages
+NO3.mean.sd <- data.frame(sampling=c("2013", "2014"), NO3.mean=rep(NA,2), NO3.sd=rep(NA,2))
+
+#calculate mean and standard deviation for NO3 species
+NO3.mean.sd[1, "NO3.mean"] <- mean(per.N.in.TotalN$per.N.in.TotalN[10:12]) #2013
+NO3.mean.sd[1, "NO3.sd"] <-sd(per.N.in.TotalN$per.N.in.TotalN[10:12]) #2013
+
+NO3.mean.sd[2, "NO3.mean"] <- mean(per.N.in.TotalN$per.N.in.TotalN[13:18]) #2014
+NO3.mean.sd[2, "NO3.sd"] <-sd(per.N.in.TotalN$per.N.in.TotalN[13:18]) #2014
+
+NO3.mean.sd
+
+rm(per.N.in.TotalN, perN.tmp, NO3.mean.sd)
+```
+
+
+######Figure: Total Inorganic Nitrogen
+
+Organize data for graphing:
+
+```{r}
+#subset Total-N for graphing
+graphing_Total.N <- Sage.N.Fert %>% 
+  group_by(Ranch.Code, Site.Code, Trt.Code) %>%
+  summarise_at(c("Total.N.2013.Cusp_ug.10cm2.buriallength", "Total.N.2015.Und_ug.10cm2.230day", "Total.N.2015.Int_ug.10cm2.230day"),
+               mean, na.rm=TRUE)
+
+#re-organize data for graphing histograms by group
+graphing_Total.N <- gather(graphing_Total.N, "sampling", "N.content", 4:6)
+
+#re-label sampling time/location
+graphing_Total.N$sampling <- gsub("Total.N.2013.Cusp_ug.10cm2.buriallength", "2012-13 (Cusp)", graphing_Total.N$sampling, fixed=TRUE)
+graphing_Total.N$sampling <- gsub("Total.N.2015.Int_ug.10cm2.230day", "2014-15 (Interspace)", graphing_Total.N$sampling, fixed=TRUE)
+graphing_Total.N$sampling <- gsub("Total.N.2015.Und_ug.10cm2.230day", "2014-15 (Under)", graphing_Total.N$sampling, fixed=TRUE)
+
+#summarize N, means, standard deviations, standard error, and 95% CI
+graphing_Total.N <- graphing_Total.N %>% 
+  group_by(sampling, Trt.Code) %>% 
+  summarise_at(vars(N.content), list(~n(), ~mean, ~std.error))
+
+colnames(graphing_Total.N)[4:5] <- c("N.content", "se")
+```
+
+
+Graph soil Total N:
+
+```{r}
+#PUBLICATION FIGURE for PLOS ONE
+treatment.colors <- c("gray80", "khaki", "blue")
+
+Fig1_Total.N <- ggplot(graphing_Total.N, aes(x=sampling, y=N.content, fill=Trt.Code)) + 
+  geom_bar(position=position_dodge(), stat="identity",
+           colour="black", # Use black outlines,
+           size=.3) +      # Thinner lines
+  geom_errorbar(aes(ymin=N.content-se, ymax=N.content+se),
+                size=.3,    # Thinner lines
+                width=.2,
+                position=position_dodge(.9)) +
+  xlab("Year & Location") +
+  ylab(expression(Total~Inorganic~N~" "(mu*g~N~10*cm^{-2}))) +
+  scale_fill_manual(name="Treatment", # Legend label, use darker colors
+                 breaks=c("C", "H", "N"),
+                 labels=c("control", "hay/N removal", "N addition"),
+                 values=treatment.colors) +
+  theme_bw() +
+  theme(text=element_text(size=10), axis.text=element_text(size=8.0), panel.grid.minor = element_blank(), panel.grid.major = element_blank()) +
+  theme(legend.text=element_text(size=9), legend.title=element_text(size=9), legend.key.size = unit(0.75, "line"), legend.position = c(0.775, 0.85), legend.background = element_rect(colour = 'black', fill = 'white', linetype='solid', size=0.2)) +
+  annotate("text", x = c(0.7,1,1.3,1.7,2,2.3,2.7,3,3.3), y = c(750,250,750,200,200,200, 200,200,200), label = c("","*","***","","","","","",""), cex=4)
+
+Fig1_Total.N
+
+rm(treatment.colors)
+```
+
+
+```{r, eval=F, echo=F}
+#export figure
+
+#open PDF
+tiff(here("4_Data.Analysis", "Figures", "Beltz_2018_Sagebrush.N.Fert_Figure.1_TotalN_PUB.PLOS.tiff"), width=5, height=5, units="in", res=400)
+
+Fig1_Total.N
+
+#turn PDF off
+dev.off()
+```
+
+
+```{r}
+rm(graphing_Total.N)
+```
+
+
+\pagebreak
+
+
+
+## C & N content of sagebrush leader
+
+#### Weight %
+
+```{r}
+#Wt.N %
+mod.WtN <- list()
+mod.WtN[["lme"]] <- list()
+
+mod.WtN[["lme"]][["wo"]] <- nlme::lme(Wt.N_per ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod.WtN[["lme"]], anova)
+
+summary(nlme::lme(Wt.N_per ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.WtN[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#Wt C %
+mod.WtC <- list()
+mod.WtC[["lme"]] <- list()
+
+mod.WtC[["lme"]][["wo"]] <- nlme::lme(Wt.C_per ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod.WtC[["lme"]], anova)
+
+summary(nlme::lme(Wt.C_per ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.WtC[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#C:N Ratio
+mod.CN <- list()
+mod.CN[["lme"]] <- list()
+
+mod.CN[["lme"]][["wo"]] <- nlme::lme(C.N_ratio ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod.CN[["lme"]], anova)
+
+summary(nlme::lme(C.N_ratio ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.CN[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+
+#### Total Grams
+
+Create total C and N weight (dry mass * %C or %N) for each row:
+
+```{r}
+Sage.N.Fert$Total.C_g <- Sage.N.Fert$Dry.Mass_g*Sage.N.Fert$Wt.C_per
+Sage.N.Fert$Total.N_g <- Sage.N.Fert$Dry.Mass_g*Sage.N.Fert$Wt.N_per
+```
+
+
+```{r}
+#Total C
+mod.totC <- list()
+mod.totC[["lme"]] <- list()
+
+mod.totC[["lme"]][["wo"]] <- nlme::lme(Total.C_g ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod.totC[["lme"]], anova)
+
+summary(nlme::lme(Total.C_g ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.totC[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#Total N
+mod.totN <- list()
+mod.totN[["lme"]] <- list()
+
+mod.totN[["lme"]][["wo"]] <- nlme::lme(Total.N_g ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod.totN[["lme"]], anova)
+
+summary(nlme::lme(Total.N_g ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.totN[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+rm(mod.WtN, mod.WtC, mod.CN, mod.totC, mod.totN)
+```
+
+
+\pagebreak
+
+
+
+## Sagebrush Growth
+
+Calculate 'leader dry density'
+
+```{r}
+Sage.N.Fert$mass.length_g.cm <- Sage.N.Fert$Dry.Mass_g*Sage.N.Fert$Leader.Length_cm
+```
+
+
+Leader Length
+
+```{r}
+mod.leader <- list()
+mod.leader[["lme"]] <- list()
+
+mod.leader[["lme"]][["wo"]] <- nlme::lme(Leader.Length_cm ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod.leader[["lme"]], anova)
+
+summary(nlme::lme(Leader.Length_cm ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.leader[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+
+Infloresence Length
+
+```{r}
+mod.inflor <- list()
+mod.inflor[["lme"]] <- list()
+
+mod.inflor[["lme"]][["wo"]] <- nlme::lme(Inflor.Length_cm ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod.inflor[["lme"]], anova)
+
+summary(nlme::lme(Inflor.Length_cm ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.inflor[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+
+Dry Mass
+
+```{r}
+mod.mass <- list()
+mod.mass[["lme"]] <- list()
+
+mod.mass[["lme"]][["wo"]] <- nlme::lme(Dry.Mass_g ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod.mass[["lme"]], anova)
+
+summary(nlme::lme(Dry.Mass_g ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.mass[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+mod.density <- list()
+mod.density[["lme"]] <- list()
+
+mod.density[["lme"]][["wo"]] <- nlme::lme(mass.length_g.cm ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod.density[["lme"]], anova)
+
+summary(nlme::lme(mass.length_g.cm ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.density[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+
+```{r}
+#remove sagebrush growth models
+rm(mod.leader, mod.inflor, mod.mass, mod.density)
+```
+
+
+
+######Figure: Combined Forage Growth & Quality
+
+Aggregate length and mass to site:
+
+```{r}
+plot_Leader <- Sage.N.Fert %>% 
+  group_by(Ranch.Code, Site.Code, Trt.Code) %>%
+  summarise_at(c("Leader.Length_cm", "Dry.Mass_g", "Inflor.Length_cm", "Wt.N_per", "C.N_ratio", "Total.N_g"),
+               mean, na.rm=TRUE)
+```
+
+Convert to long format and add specifics levels to order plots:
+
+```{r}
+plot_Leader <- gather(plot_Leader, key="Measurement", value="Value", 4:9)
+
+plot_Leader$Measurement <- factor(plot_Leader$Measurement, levels=c("Leader.Length_cm", "Dry.Mass_g", "Inflor.Length_cm", "C.N_ratio", "Wt.N_per", "Total.N_g"))
+```
+
+
+Create figure:
+
+```{r}
+treatment.colors <- c("gray80", "khaki", "blue")
+
+Fig2_Leader <- ggplot(plot_Leader, aes(x=Trt.Code, y=Value)) + 
+  geom_boxplot(aes(fill=Trt.Code))  +
+  facet_wrap(~Measurement, scales = 'free',
+             strip.position = "left",
+             labeller = as_labeller(c(Leader.Length_cm = "Length (cm)", Dry.Mass_g = "Dry Mass (g)", Inflor.Length_cm="Length (cm)", Wt.N_per = "Nitrogen Mass (%)", C.N_ratio= "C:N Ratio", Total.N_g= "Mass of N (g)") )) +
+    scale_fill_manual(name="Treatment", # Legend label, use darker colors
+                 breaks=c("C", "H", "N"),
+                 labels=c("control", "hay/N removal", "N addition"),
+                 values=treatment.colors) +
+  xlab(NULL) +
+  ylab(NULL) +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.placement="outside",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  theme(text=element_text(size=10), 
+        axis.text=element_text(size=8.0), 
+        panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank()) +
+  theme(legend.position = "none")
+
+Fig2_Leader
+```
+
+```{r, eval=F, echo=F}
+#export figure
+
+#open PDF
+tiff(here("4_Data.Analysis", "Figures", "Beltz_2019_Sagebrush.N.Fert_Figure.2_Leader_PUB.PLOS.tiff"), width=5, height=3.5, units="in", res=400)
+
+Fig2_Leader
+
+#turn PDF off
+dev.off()
+```
+
+
+```{r}
+rm(plot_Leader)
+```
+
+
+\pagebreak
+
+
+
+## Plant Community
+
+
+
+```{r}
+#Cover
+mod.cover <- list()
+mod.cover[["lme"]] <- list()
+
+mod.cover[["lme"]][["wo"]] <- nlme::lme(Total.Cover_per ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit)
+
+lapply(mod.cover[["lme"]], anova)
+
+summary(nlme::lme(Total.Cover_per ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.cover[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#Species Richness
+mod.SR <- list()
+mod.SR[["lme"]] <- list()
+
+mod.SR[["lme"]][["wo"]] <- nlme::lme(Species.Rich_num ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit)
+
+lapply(mod.SR[["lme"]], anova)
+
+summary(nlme::lme(Species.Rich_num ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.SR[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+rm(mod.cover, mod.SR)
+```
+
+
+######Figure: Plant Cover and Species Richness
+
+Summarize soil N by ranch, site number, and treatment:
+
+```{r}
+Plant.Community_site.mean <- 
+  Sage.N.Fert %>% group_by(Ranch.Code, Site.Code, Trt.Code) %>%
+  summarise_at(c("Total.N.2013.Cusp_ug.10cm2.buriallength", "Total.Cover_per", "Species.Rich_num"),
+               mean, na.rm=TRUE)
+```
+
+Boxplots of total plant cover and species richness:
+
+```{r}
+treatment.colors <- c("gray80", "khaki", "blue")
+
+Fig4_PlantCom <- ggplot(gather(Plant.Community_site.mean, key="Measurement", value="Value", 5:6), aes(x=Trt.Code, y=Value)) + 
+  geom_boxplot(aes(fill=Trt.Code))  +
+  facet_wrap(~Measurement, scales = 'free',
+             strip.position = "left",
+             labeller = as_labeller(c(Species.Rich_num = "Number of Species", Total.Cover_per = "Total Cover (%)") )) +
+  scale_fill_manual(name="Treatment", # Legend label, use darker colors
+                 breaks=c("C", "H", "N"),
+                 labels=c("control", "hay/N removal", "N addition"),
+                 values=treatment.colors) +
+  xlab(NULL) +
+  ylab(NULL) +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        strip.placement="outside",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  theme(text=element_text(size=10), 
+        axis.text=element_text(size=8.0), 
+        panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank()) +
+  theme(legend.position = "none")
+
+Fig4_PlantCom
+
+rm(Plant.Community_site.mean, treatment.colors)
+```
+
+```{r, eval=F, echo=F}
+#export figure
+
+#open PDF
+tiff(here("4_Data.Analysis", "Figures", "Beltz_2019_Sagebrush.N.Fert_Figure.4_PlantCom_PUB.PLOS.tiff"), width=3.34, height=1.75, units="in", res=400)
+
+Fig4_PlantCom
+
+#turn PDF off
+dev.off()
+```
+
+
+####Bray-Curtis Similarity:
+
+```{r}
+#subset data to mean cover across all 20 Daubenmire quadrats within treatment
+tmp.Species2 <- Veg.Com %>% group_by(Site.Trt.Code, Trt.Code, Species.Code) %>% summarize_at("Canopy.Cover.Midpoint_per", sum)
+
+tmp.Species2[,"Canopy.Cover.Midpoint_per"] <-
+  tmp.Species2[,"Canopy.Cover.Midpoint_per"]/20
+
+tmp.Species2 <- as.data.frame(tmp.Species2[,-1])
+
+#matrify (i.e. convery columns to rows)
+tmp.Species2 <- matrify(tmp.Species2)
+
+#calculating bray curtis for cover
+BC.dissimilarity <- distance(tmp.Species2, "bray-curtis")
+
+#calculated similarity as 1-dissimlarity * 100 for percentage
+BC.similarity<-(1-BC.dissimilarity)*100
+
+BC.similarity
+
+rm(tmp.Species2, BC.dissimilarity, BC.similarity)
+```
+
+
+####PERMANOVA:
+
+Create separate community matrix and metedata:
+
+```{r}
+#sum cover by treatment block (5 sites x 3 each treatment = 15 per treatment)
+Veg_summary <- Veg.Com %>%
+  group_by(Ranch.Code, Site.Num, Plot.Code, Trt.Code, Species.Code) %>%
+  summarise(Daub.per.trt=n(), sum.cover=sum(Canopy.Cover.Midpoint_per))
+
+#sum cover by site & treatment (n=5)
+Veg_summary <- Veg_summary %>% 
+  group_by(Ranch.Code, Site.Num, Trt.Code, Species.Code) %>%
+  summarise(sum.cover2=sum(sum.cover))
+
+#Separate plant community/species data from experimental/environmental metadata
+Veg_matrix <- spread(Veg_summary, Species.Code, sum.cover2)
+Veg_env <- Veg_matrix[,c("Ranch.Code", "Site.Num", "Trt.Code")]
+Veg_matrix <- Veg_matrix[,-c(1:3)]
+Veg_matrix[is.na(Veg_matrix)] <- 0
+
+head(Veg_matrix)
+str(Veg_env)
+```
+
+
+Scale total abundance to relative abundance:
+
+```{r}
+# check total abundance in each sample
+hist(apply(Veg_matrix, 1, sum))
+
+#scale total abundance to relative abundance
+Veg_matrix <- decostand(Veg_matrix, method = "total")
+
+#re-check total abundance in each sample
+apply(Veg_matrix, 1, sum)
+```
+
+
+```{r}
+adonis(Veg_matrix ~ Trt.Code, data=Veg_env, permutations = 9999, method = "bray",
+       strata = NULL)
+
+rm(Veg_matrix, Veg_env)
+```
+
+
+####Summary Stats
+
+
+Compare control plots for significant differences:
+
+```{r}
+#subset control treatment to compare ranches
+Veg_ctrl <- Veg_summary %>%
+  filter(Trt.Code %in% c("C"))
+          
+#Separate plant community/species data from experimental/environmental metadata
+Veg_matrix2 <- spread(Veg_ctrl, Species.Code, sum.cover2)
+Veg_env2 <- Veg_matrix2[,c("Ranch.Code", "Site.Num", "Trt.Code")]
+Veg_matrix2 <- Veg_matrix2[,-c(1:3)]
+Veg_matrix2[is.na(Veg_matrix2)] <- 0
+
+# check total abundance in each sample
+hist(apply(Veg_matrix2, 1, sum))
+
+#scale total abundance to relative abundance
+Veg_matrix2 <- decostand(Veg_matrix2, method = "total")
+
+#re-check total abundance in each sample
+apply(Veg_matrix2, 1, sum)
+
+#compare control treatments by ranch
+adonis(Veg_matrix2 ~ Ranch.Code, data=Veg_env2, permutations = 120, method = "bray",
+       strata = NULL)
+
+rm(Veg_summary, Veg_matrix2, Veg_env2)
+```
+
+
+Examine most common species in the control plots:
+
+```{r}
+Veg_ctrl <- Veg.Com %>%
+  group_by(Ranch.Code, Site.Num, Plot.Code, Trt.Code, Species.Code) %>%
+  summarise(Daub.per.trt=n(), sum.cover=sum(Canopy.Cover.Midpoint_per))
+
+Veg_ctrl <- Veg_ctrl %>% 
+  group_by(Ranch.Code, Site.Num, Trt.Code, Species.Code) %>%
+  summarise(sum.cover2=sum(sum.cover))
+
+Veg_ctrl <- Veg_ctrl %>%
+  filter(Trt.Code %in% c("C")) 
+
+Veg_ctrl <- Veg_ctrl %>%
+  group_by(Ranch.Code, Site.Num, Species.Code) %>%
+  summarise(mean.cover=sum.cover2/60)
+
+#correct for Ranch B having only 2 sites instead of three for plant community sampling
+Veg_ctrl$mean.cover <- ifelse(Veg_ctrl$Ranch.Code=="B" & Veg_ctrl$Site.Num==2, Veg_ctrl$mean.cover*60/40, Veg_ctrl$mean.cover)
+
+Veg_ctrl <-  Veg_ctrl %>%
+  group_by(Ranch.Code, Species.Code) %>%
+  summarise(mean.cover2=mean(mean.cover))
+
+Veg_ctrl %>%
+  top_n(n = 5, wt = mean.cover2)
+
+rm(Veg_ctrl)
+```
+
+
+Examine differences in P. smithii (Western wheatgrass):
+
+```{r}
+Veg_wheatgrass <- Veg.Com %>%
+  group_by(Ranch.Code, Site.Num, Plot.Code, Trt.Code, Species.Code) %>%
+  summarise(Daub.per.trt=n(), mean.cover=sum(Canopy.Cover.Midpoint_per/20))
+
+#subset only PASM 
+Veg_wheatgrass <- Veg_wheatgrass %>%
+  filter(Species.Code %in% c("PASM"))
+```
+
+```{r}
+mod.wheatgrass <- list()
+mod.wheatgrass[["lme"]] <- list()
+
+mod.wheatgrass[["lme"]][["wo"]] <- nlme::lme(mean.cover ~ Trt.Code,
+    random = ~ 1 | Site.Num/Plot.Code, data = Veg_wheatgrass)
+
+lapply(mod.wheatgrass[["lme"]], anova)
+
+summary(nlme::lme(mean.cover ~ Trt.Code,
+    random = ~ 1 | Site.Num/Plot.Code, data = Veg_wheatgrass))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod.wheatgrass[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+
+rm(Veg_wheatgrass, mod.wheatgrass)
+```
+
+\pagebreak
+
+
+
+## Trace Gas
+
+#### 02Jul13
+
+```{r}
+#CO2
+mod1.CO2 <- list()
+mod1.CO2[["lme"]] <- list()
+
+mod1.CO2[["lme"]][["wo"]] <- nlme::lme(CO2.Flux_mg.m2.hr_2Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod1.CO2[["lme"]], anova)
+
+summary(nlme::lme(CO2.Flux_mg.m2.hr_2Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod1.CO2[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#CH4
+mod1.CH4 <- list()
+mod1.CH4[["lme"]] <- list()
+
+mod1.CH4[["lme"]][["wo"]] <- nlme::lme(CH4.Flux_mg.m2.hr_2Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod1.CH4[["lme"]], anova)
+
+summary(nlme::lme(CH4.Flux_mg.m2.hr_2Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod1.CH4[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#N2O
+mod1.N2O <- list()
+mod1.N2O[["lme"]] <- list()
+
+mod1.N2O[["lme"]][["wo"]] <- nlme::lme(N2O.Flux_mg.m2.hr_2Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert)
+
+lapply(mod1.N2O[["lme"]], anova)
+
+summary(nlme::lme(N2O.Flux_mg.m2.hr_2Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod1.N2O[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+
+
+####25Jul13
+
+```{r}
+#CO2
+mod2.CO2 <- list()
+mod2.CO2[["lme"]] <- list()
+
+mod2.CO2[["lme"]][["wo"]] <- nlme::lme(CO2.Flux_mg.m2.hr_25Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit)
+
+lapply(mod2.CO2[["lme"]], anova)
+
+summary(nlme::lme(CO2.Flux_mg.m2.hr_25Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod2.CO2[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#CH4
+mod2.CH4 <- list()
+mod2.CH4[["lme"]] <- list()
+
+mod2.CH4[["lme"]][["wo"]] <- nlme::lme(CH4.Flux_mg.m2.hr_25Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit)
+
+lapply(mod2.CH4[["lme"]], anova)
+
+summary(nlme::lme(CH4.Flux_mg.m2.hr_25Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod2.CH4[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+#N2O
+mod2.N2O <- list()
+mod2.N2O[["lme"]] <- list()
+
+mod2.N2O[["lme"]][["wo"]] <- nlme::lme(N2O.Flux_mg.m2.hr_25Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit)
+
+lapply(mod2.N2O[["lme"]], anova)
+
+summary(nlme::lme(N2O.Flux_mg.m2.hr_25Jul13 ~ Trt.Code,
+    random = ~ 1 | Site.Code/Plot.Code, data = Sage.N.Fert, na.action=na.omit))
+
+# Post-hoc for treatment
+emmeans::emmeans(mod2.N2O[["lme"]][["wo"]], ~ Trt.Code, sigmaAdjust = TRUE)
+```
+
+```{r}
+rm(mod1.CO2, mod2.CO2, mod1.CH4, mod2.CH4, mod1.N2O, mod2.N2O)
+```
+
+
+Calculate flux means for reference values:
+
+```{r}
+tmp.Flux <- Sage.N.Fert %>% 
+  group_by(Trt.Code) %>% summarize_at(c("CO2.Flux_mg.m2.hr_2Jul13", "CH4.Flux_mg.m2.hr_2Jul13", "N2O.Flux_mg.m2.hr_2Jul13", "CO2.Flux_mg.m2.hr_25Jul13", "CH4.Flux_mg.m2.hr_25Jul13", "N2O.Flux_mg.m2.hr_25Jul13" ), mean, na.rm=T)
+
+Gas.Flux_means <- data.frame(unit=c("mg.m2.hr", "kg.ha.yr"), CO2.mean=NA, CH4.mean=NA, N2O.mean=NA)
+
+#mg per m^2 per hour
+Gas.Flux_means[1,2] <- sum(tmp.Flux[1,c(2,5)])/2
+Gas.Flux_means[1,3] <- sum(tmp.Flux[1,c(3,6)])/2
+Gas.Flux_means[1,4] <- sum(tmp.Flux[1,c(4,7)])/2
+
+#kg per ha per year
+Gas.Flux_means[2,2] <- Gas.Flux_means[1,2]*((10^4*24*365)/(10^6))
+Gas.Flux_means[2,3] <- Gas.Flux_means[1,3]*((10^4*24)/10^6)
+Gas.Flux_means[2,4] <- Gas.Flux_means[1,4]*((10^4*24)/10^6)
+
+Gas.Flux_means
+
+rm(tmp.Flux, Gas.Flux_means)
+```
+
+
+######Figure: Trace Gas
+
+Boxplot for each gas and measurement time:
+
+```{r}
+plot_TGas <- Sage.N.Fert %>% 
+  group_by(Ranch.Code, Site.Code, Trt.Code) %>%
+  summarise_at(c("CO2.Flux_mg.m2.hr_2Jul13", "CH4.Flux_mg.m2.hr_2Jul13", "N2O.Flux_mg.m2.hr_2Jul13", "CO2.Flux_mg.m2.hr_25Jul13", "CH4.Flux_mg.m2.hr_25Jul13", "N2O.Flux_mg.m2.hr_25Jul13"),
+               mean, na.rm=TRUE)
+
+colnames(plot_TGas) <- c("Ranch.Code", "Site.Code", "Trt.Code", "CO2 - 2Jul13", "CH4 - 2Jul13", "N2O - 2Jul13", "CO2 - 25Jul13", "CH4 - 25Jul13", "N2O - 25Jul13")
+
+plot_TGas <- gather(plot_TGas, key="Measurement", value="Value", 4:9)
+
+plot_TGas$Measurement <- factor(plot_TGas$Measurement, levels = c("CO2 - 2Jul13", "CH4 - 2Jul13", "N2O - 2Jul13", "CO2 - 25Jul13", "CH4 - 25Jul13", "N2O - 25Jul13"))
+
+levels(plot_TGas$Measurement) <- c(expression("CO"[2] * " - 02Jul13"), expression("CH"[4] * " - 02Jul13"), expression("N"[2] * "O - 02Jul13"), expression("CO"[2] * " - 25Jul13"), expression("CH"[4] * " - 25Jul13"), expression("N"[2] * "O - 25Jul13"))
+```
+
+
+Set up dummy dataset for y-axis limits:
+
+```{r}
+blank_data <- data.frame(Measurement = c("CO2 - 2Jul13", "CO2 - 2Jul13", "CH4 - 2Jul13", "CH4 - 2Jul13", "N2O - 2Jul13", "N2O - 2Jul13", "CO2 - 25Jul13", "CO2 - 25Jul13", "CH4 - 25Jul13", "CH4 - 25Jul13", "N2O - 25Jul13", "N2O - 25Jul13"))
+
+levels(blank_data$Measurement) <- c(expression("CO"[2] * " - 02Jul13"), expression("CH"[4] * " - 02Jul13"), expression("N"[2] * "O - 02Jul13"), expression("CO"[2] * " - 25Jul13"), expression("CH"[4] * " - 25Jul13"), expression("N"[2] * "O - 25Jul13"))
+
+blank_data$Value <- c(-10, 210, -0.9, 0.2, -0.35, 1.2, -0.35, 1.2, -10, 210,-0.9, 0.2)
+
+blank_data$Trt.Code <- "C"
+```
+
+
+```{r}
+treatment.colors <- c("gray80", "khaki", "blue")
+
+Fig5_TGas <- ggplot(plot_TGas, aes(x=Trt.Code, y=Value)) + 
+  geom_boxplot(aes(x=Trt.Code, fill=Trt.Code))  +
+    geom_blank(data=blank_data, aes(x=Trt.Code, y=Value)) +
+  facet_wrap(~Measurement, scales = 'free', labeller = label_parsed) +
+    scale_fill_manual(name="Treatment", # Legend label, use darker colors
+                 breaks=c("C", "H", "N"),
+                 labels=c("control", "hay/N removal", "N addition"),
+                 values=treatment.colors) +
+  xlab(NULL) +
+  ylab(expression(Gas~Flux~" "(mg~m^{-2}~hr^{-1}))) +
+  theme_bw() +
+    theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  theme(text=element_text(size=10), 
+        axis.text=element_text(size=8.0), 
+        panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank()) +
+  theme(legend.position = "none")
+
+Fig5_TGas
+
+rm(plot_TGas, blank_data, treatment.colors)
+```
+
+
+```{r, eval=F, echo=F}
+#export figure
+
+#open PDF
+tiff(here("4_Data.Analysis", "Figures", "Beltz_2019_Sagebrush.N.Fert_Figure.5_TGas_PUB.PLOS.tiff"), width=5, height=3.5, units="in", res=400)
+
+Fig5_TGas
+
+#turn PDF off
+dev.off()
+```
+
+
+
+
+##Soil N Effects on Sagebrush Growth
+
+
+###### Figure: Leader by Soil N for each Site
+
+Develop ANCOVA model, replacing treatment with soil N:
+
+```{r}
+m <- list()
+m[["lme"]] <- list()
+
+m[["lme"]][["wCov2_randomSite"]] <- nlme::lme(Leader.Length_cm ~
+  Total.N.2013.Cusp_ug.10cm2.buriallength,
+  random = ~ 1 | Site.Code / Plot.Code, data = Sage.N.Fert)
+
+anova(m[["lme"]][["wCov2_randomSite"]])
+summary(m[["lme"]][["wCov2_randomSite"]])
+VarCorr(m[["lme"]][["wCov2_randomSite"]])
+sigma(m[["lme"]][["wCov2_randomSite"]])
+
+Sage.N.Fert$Site.Code <- factor(Sage.N.Fert$Site.Code)
+Sage.N.Fert$Ranch.Code <- factor(Sage.N.Fert$Ranch.Code)
+```
+
+
+
+Graph leader length by total inorganic N in soil for each site:
+
+```{r}
+#PUBLICATION for PLOS ONE
+
+#open TIFF
+tiff(here("4_Data.Analysis", "Figures", "Beltz_2019_Sagebrush.N.Fert_Figure.3_LeaderLength.TotalN_PUB.PLOS.tiff"), width=5, height=5, units="in", res=400)
+
+# plot
+x <- Sage.N.Fert[, "Total.N.2013.Cusp_ug.10cm2.buriallength"]
+idx <- order(x)
+cols <- c("red", "purple", "orange")
+cols.site <- c("red", "red", "purple", "purple", "orange")
+p.type <- c(15,22,16,1,17)
+l.type <- c(1,2,1,2,1)
+
+plot(x = x, y = Sage.N.Fert[, "Leader.Length_cm"],
+  xlab =expression(Total~Inorganic~N~" "(mu*g~N~10~cm^{-2})), ylab = "Leader Length (cm)",
+  col = cols[as.integer(Sage.N.Fert[, "Ranch.Code"])],
+  pch = p.type[as.integer(Sage.N.Fert[, "Site.Code"])],
+  ylim = c(0, max(Sage.N.Fert[, "Leader.Length_cm"])))
+
+# fitted values
+ypreds <- fitted(m[["lme"]][["wCov2_randomSite"]], level = 0:1)
+
+# plot line of population model
+lines(x[idx], ypreds[idx, "fixed"], col = "gray", lwd = 3, lty = 4)
+
+# plot lines for each site
+for (k in seq_len(nlevels(Sage.N.Fert[, "Site.Code"]))) {
+  ids <- Sage.N.Fert[, "Site.Code"] == levels(Sage.N.Fert[, "Site.Code"])[k]
+  idx2 <- order(x[ids])
+  lines(x[ids][idx2], ypreds[ids, "Site.Code"][idx2], col = cols.site[k], lty=l.type[k], lwd = 0.7)
+}
+
+legend(x=125, y=0.7, legend = c("Ranch 1/Site 1", "Ranch 1/Site 2", "Ranch 2/Site 1", "Ranch 2/Site 2", "Ranch 3/Site 1", "Overall"), col = c(cols.site, "gray"), lty = c(l.type, 4), pch=c(p.type, NA) ,lwd = c(1,1,1,1,1,2), cex=0.7, pt.cex=0.5, bty="n", ncol=3)
+
+
+#turn PDF off
+dev.off()
+
+rm(m, ypreds, cols, cols.site, ids, idx, idx2, k, l.type, p.type, x)
+```
+
+

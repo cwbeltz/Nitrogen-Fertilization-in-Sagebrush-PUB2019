@@ -1,0 +1,903 @@
+---
+title: "Sagebrush Nitrogen Fertilization: Data Cleaning"
+author: "Christopher W. Beltz"
+date: "9/17/2018"
+output: pdf_document
+abstract: Data cleaning script for "Nitrogen addition has minimal effect in Wyoming big sagebrush (Artemisia tridentata) communities" (2018). Data cleaning was conducted under R version 3.5.1. File created on 2018-07-29. Files last updated on 2018-09-10. All packages were updated as of 2018-09-17.
+
+---
+
+##Set-Up
+
+```{r, eval=F, echo=F}
+#install packages, only if needed
+install.packages("knitr")
+install.packages("tidyverse")
+install.packages("lubridate")
+install.packages("ggthemes")
+install.packages("GGally")
+install.packages("soiltexture")
+install.packages("here")
+```
+
+
+Report R version:
+
+```{r}
+R.version
+```
+
+
+Load Packages:
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+load.pkg <- c("knitr",
+              "tidyverse",
+              "lubridate", 
+              "ggthemes", 
+              "GGally", 
+              "soiltexture", #v1.4.6 generates an error in newer versions of R
+              "here") #'here' pkg must be loaded after lubridate) 
+
+lapply(load.pkg, require, character.only = TRUE)
+```
+
+
+Report package version:
+
+```{r}
+lapply(load.pkg, packageVersion)
+
+rm(load.pkg)
+```
+
+
+Read in data:
+
+```{r}
+#here() uses a package to set a reproducible working directory
+
+Length.Inflor <- read.csv(here("3_Data.Entry", "CSV_Converted.from.Excel", "Beltz_2014_Sagebrush.N.Fertilization_Inflor.Length.csv"), as.is = TRUE)
+
+Length.Leader <- read.csv(here("3_Data.Entry", "CSV_Converted.from.Excel", "Beltz_2014_Sagebrush.N.Fertilization_Leader.Length.csv"), as.is = TRUE)
+
+Veg.Com <- read.csv(here("3_Data.Entry", "CSV_Converted.from.Excel", "Beltz_2014_Sagebrush.N.Fertilization_Veg.Com.csv"), as.is = TRUE)
+
+SoilN_14.15 <- read.csv(here("3_Data.Entry", "CSV_Converted.from.Excel", "Beltz_2014.15_Sagebrush.N.Fertilization_PRS.N.csv"), as.is = TRUE)
+
+CandN.Leaders <- read.csv(here("3_Data.Entry", "CSV_Converted.from.Excel", "Beltz_2015_Sagebrush.N.Fertilization_C.N.Leaders.csv"), as.is = TRUE)
+
+CandN.Hay <- read.csv(here("3_Data.Entry", "CSV_Converted.from.Excel", "Beltz_2016_Sagebrush.N.Fertilization_C.N.Hay.csv"), as.is = TRUE)
+
+Text.Soil <- read.csv(here("3_Data.Entry", "CSV_Converted.from.Excel", "Beltz_2017_Sagebrush.N.Fertilization_Soil.Texture.csv"), as.is = TRUE)
+
+SoilN_12.13 <- read.csv(here("3_Data.Entry", "CSV_Converted.from.Excel", "Mobley_2012.13_Sagebrush.N.Fertilization_PRS.N.csv"), as.is = TRUE)
+
+TGas.13 <- read.csv(here("3_Data.Entry", "CSV_Converted.from.Excel", "Mobley_2013_Sagebrush.N.Fertilization_Trace.Gas.csv"), as.is = TRUE)
+```
+
+\pagebreak
+
+
+## Soil Texture
+
+Check structure and data classes:
+
+```{r}
+str(Text.Soil)
+```
+
+
+Check all columns for NAs and data range:
+
+```{r}
+summary(Text.Soil)
+```
+
+
+Check for incorrect soil type or plot:
+
+```{r}
+unique(Text.Soil[,5]) #three separate distinct types
+unique(Text.Soil[,"Site.ID"]) #15 plots
+```
+
+
+Check frequency distribution:
+
+```{r}
+ggplot(gather(Text.Soil, "fraction", "percentage", sand_per:silt_per), aes(percentage)) + 
+    geom_histogram(bins = 5) + 
+    facet_wrap(~fraction, scales = 'free_x')
+```
+
+
+Check for outliers:
+
+```{r}
+ggplot(gather(Text.Soil, "fraction", "percentage", sand_per:silt_per), aes(x=fraction, y=percentage)) + 
+    geom_boxplot()
+```
+
+
+*Soil texture data appears clean with no concerns about data entry errors.*
+
+\pagebreak
+
+
+
+##Soil Nitrogen
+
+Remove extraneous rows/columns genereated from extra commas due to Excel:
+
+```{r}
+SoilN_12.13 <- SoilN_12.13[1:63,]
+SoilN_14.15 <- SoilN_14.15[1:90, 1:9]
+```
+
+
+Remove grazed treatment values from 2012-13 data. This portion of the project was not continued:
+
+```{r}
+SoilN_12.13 <- SoilN_12.13[SoilN_12.13$Grazed=="E",]
+```
+
+
+Remove "Sample" and "Grazed" columns from 2012-13 data:
+
+```{r}
+SoilN_12.13 <- SoilN_12.13[,-c(1,6)]
+```
+
+
+Alter column names in 2012-13 data to match project standards:
+
+```{r}
+colnames(SoilN_12.13) <- c("Site.Trt.Code", "Ranch", "Site.Num", "Plot.Code", "Trt.Code", "BurialLength.2013_days", "Total.N.2013.Cusp_ug.10cm2.buriallength", "NO3.N.2013.Cusp_ug.10cm2.buriallength", "NH4.N.2013.Cusp_ug.10cm2.buriallength")
+```
+
+
+Remove "E" from treatment code:
+
+```{r}
+SoilN_12.13$Site.Trt.Code <- gsub("EC", "C", SoilN_12.13$Site.Trt.Code)
+SoilN_12.13$Site.Trt.Code <- gsub("EH", "H", SoilN_12.13$Site.Trt.Code)
+SoilN_12.13$Site.Trt.Code <- gsub("EN", "N", SoilN_12.13$Site.Trt.Code)
+```
+
+
+Change Ranch to Ranch.Code:
+
+```{r}
+SoilN_12.13$Ranch <- gsub("Botur", "B", SoilN_12.13$Ranch)
+SoilN_12.13$Ranch <- gsub("Pape", "P", SoilN_12.13$Ranch)
+SoilN_12.13$Ranch <- gsub("Sommers", "S", SoilN_12.13$Ranch)
+
+colnames(SoilN_12.13)[2] <- "Ranch.Code"
+```
+
+
+Remove un-needed columns:
+
+```{r}
+SoilN_14.15 <- SoilN_14.15[,-c(2,5,6)]
+```
+
+
+Calculate days PRS probes were in the field:
+
+```{r}
+SoilN_14.15$BurialLength.2015_days <- difftime(SoilN_14.15$Retrieval.Date, SoilN_14.15$Burial.Date, units="days" )
+```
+
+
+Remove dates field and reorder columns:
+
+```{r}
+SoilN_14.15 <- SoilN_14.15[,-c(2:3)]
+SoilN_14.15 <- SoilN_14.15[,c(1,5,2:4)]
+```
+
+Remove "E" from treatment code:
+
+```{r}
+SoilN_14.15$Site.Trd.Code <- gsub("EC", "C", SoilN_14.15$Site.Trd.Code)
+SoilN_14.15$Site.Trd.Code <- gsub("EH", "H", SoilN_14.15$Site.Trd.Code)
+SoilN_14.15$Site.Trd.Code <- gsub("EN", "N", SoilN_14.15$Site.Trd.Code)
+```
+
+
+Extract codes for ranch, site, plot, treatment, and position. Put all in their own column:
+
+```{r}
+SoilN_14.15$Ranch.Code <- str_sub(SoilN_14.15$Site.Trd.Code, start=1, end=1)
+SoilN_14.15$Site.Num <- str_sub(SoilN_14.15$Site.Trd.Code, start=2, end=2)
+SoilN_14.15$Plot.Code <- str_sub(SoilN_14.15$Site.Trd.Code, start=3, end=3)
+SoilN_14.15$Trt.Code <- str_sub(SoilN_14.15$Site.Trd.Code, start=5, end=5)
+SoilN_14.15$Position.2015 <- str_sub(SoilN_14.15$Site.Trd.Code, start=-1, end=-1)
+```
+
+
+Put under ("U") and interspace ("I") in separate columns:
+
+```{r}
+SoilN_14.15$Site.Trd.Code <- str_sub(SoilN_14.15$Site.Trd.Code, start=1, end=5) #remove position code from site.trt.code
+
+SoilN_14.15 <- SoilN_14.15 %>% 
+  gather(variable, value, -c(1:2,6:10)) %>%
+  unite(temp, Position.2015, variable) %>%
+  spread(temp, value)
+```
+
+
+Edit column names for clarity and include days in units:
+
+```{r}
+colnames(SoilN_14.15) <- c("Site.Trt.Code", "BurialLength.2015_days", "Ranch.Code", "Site.Num", "Plot.Code", "Trt.Code", "NH4.N.2015.Int_ug.10cm2.230day", "NO3.N.2015.Int_ug.10cm2.230day", "Total.N.2015.Int_ug.10cm2.230day", "NH4.N.2015.Und_ug.10cm2.230day", "NO3.N.2015.Und_ug.10cm2.230day", "Total.N.2015.Und_ug.10cm2.230day")
+
+SoilN_14.15 <- SoilN_14.15[,-2]
+```
+
+
+Combine all soil N Data:
+
+```{r}
+SoilN_all <- merge(SoilN_12.13, SoilN_14.15[,c("Site.Trt.Code", "NH4.N.2015.Int_ug.10cm2.230day", "NO3.N.2015.Int_ug.10cm2.230day", "Total.N.2015.Int_ug.10cm2.230day", "NH4.N.2015.Und_ug.10cm2.230day", "NO3.N.2015.Und_ug.10cm2.230day", "Total.N.2015.Und_ug.10cm2.230day")], by="Site.Trt.Code")
+
+rm(SoilN_12.13, SoilN_14.15)
+```
+
+
+Check structure:
+
+```{r}
+str(SoilN_all)
+```
+
+
+Add Site ID to each row:
+
+```{r}
+SoilN_all$Site.ID <- str_sub(SoilN_all$Site.Trt.Code, start=1, end=3)
+
+SoilN_all <- SoilN_all[,c(1,16,2:15)] #move new Site.ID variable to second column
+```
+
+
+Fix data class for columns from 2013 data:
+
+```{r}
+SoilN_all$BurialLength.2013_days <- as.numeric(SoilN_all$BurialLength.2013_days)
+
+SoilN_all$Total.N.2013.Cusp_ug.10cm2.buriallength <- as.numeric(SoilN_all$Total.N.2013.Cusp_ug.10cm2.buriallength)
+
+SoilN_all$NO3.N.2013.Cusp_ug.10cm2.buriallength <- as.numeric(SoilN_all$NO3.N.2013.Cusp_ug.10cm2.buriallength)
+
+SoilN_all$NH4.N.2013.Cusp_ug.10cm2.buriallength <- as.numeric(SoilN_all$NH4.N.2013.Cusp_ug.10cm2.buriallength)
+
+str(SoilN_all)
+```
+
+
+
+Check all columns for NAs and data range:
+
+```{r}
+summary(SoilN_all)
+```
+
+
+Check for incorrect category labels:
+
+```{r}
+lapply(SoilN_all[,1:6], function(x) length(unique(x))) 
+
+#45 ID codes, 15 site IDs, three ranches, two sites, three plot codes, and three treatment codes.
+```
+
+
+Check frequency distribution:
+
+```{r}
+ggplot(gather(SoilN_all, key="Measurement", value="Value", Total.N.2013.Cusp_ug.10cm2.buriallength:Total.N.2015.Und_ug.10cm2.230day), aes(Value)) + 
+    geom_histogram() + 
+    facet_wrap(~Measurement, scales = 'free_x')
+```
+
+
+Check for outliers:
+
+```{r}
+ggplot(gather(SoilN_all, key="Measurement", value="Value", Total.N.2013.Cusp_ug.10cm2.buriallength:Total.N.2015.Und_ug.10cm2.230day), aes(x=Trt.Code, y=Value)) + 
+  geom_boxplot() +
+  facet_wrap(~Measurement, scales = 'free')
+```
+
+
+Confirm no data below 0 (i.e. N availability cannot be negative):
+
+```{r}
+which(SoilN_all[,8:ncol(SoilN_all)] < 0)
+```
+
+
+*Soil N data appears clean. While these data contain some high values, it conforms to expectations and contains no values below zero.*
+
+\pagebreak
+
+
+
+## Carbon and Nitrogen Content for Hay
+
+Check structure and data classes:
+
+```{r}
+str(CandN.Hay)
+```
+
+
+Check all columns for NAs and data range:
+
+```{r}
+summary(CandN.Hay)
+```
+
+
+Check for six unique sample IDs:
+
+```{r}
+unique(CandN.Hay$Sample.ID) #three batches of hay with two reps each
+```
+
+
+Check for outliers:
+
+```{r}
+ggplot(gather(CandN.Hay, key="Key", value="Value", d15N:C.N_ratio), aes(y=Value)) + 
+  geom_boxplot() +
+  facet_wrap(~Key, scales = 'free') +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+
+
+*Combustion analysis (i.e. carbon and nitrogen content) data of hay samples appears clean with no concerns about data entry errors.*
+
+\pagebreak
+
+
+
+## Carbon and Nitrogen Content for Sagebrush Leaders (i.e. annual growth)
+
+Alter column names to match project standards:
+
+```{r}
+colnames(CandN.Leaders) <- c("Site.Trt.Code", "d15N", "d13C", "Wt.N_per", "Wt.C_per", "C.N_ratio")
+```
+
+
+Remove "E" from treatment code:
+
+```{r}
+CandN.Leaders$Site.Trt.Code <- gsub("EC", "C", CandN.Leaders$Site.Trt.Code)
+CandN.Leaders$Site.Trt.Code <- gsub("EH", "H", CandN.Leaders$Site.Trt.Code)
+CandN.Leaders$Site.Trt.Code <- gsub("EN", "N", CandN.Leaders$Site.Trt.Code)
+```
+
+
+For repeated samples (i.e. code starts with "rep"), move rep ID to its own column:
+
+```{r}
+CandN.Leaders$Rep <- ifelse(str_sub(CandN.Leaders$Site.Trt.Code, start=1, end=3) == "rep", 2, 1)
+```
+
+
+Remove "rep" at start of site/treatment code:
+
+```{r}
+CandN.Leaders$Site.Trt.Code <- gsub("rep", "", CandN.Leaders$Site.Trt.Code)
+```
+
+
+Remove extra space in treatment code:
+
+```{r}
+CandN.Leaders$Site.Trt.Code <- gsub(" ", "", CandN.Leaders$Site.Trt.Code)
+```
+
+
+Extract codes for Site ID, ranch, site, plot, and treatment. Put all in their own column:
+
+```{r}
+CandN.Leaders$Site.ID <- str_sub(CandN.Leaders$Site.Trt.Code, start=1, end=3)
+CandN.Leaders$Ranch.Code <- str_sub(CandN.Leaders$Site.Trt.Code, start=1, end=1)
+CandN.Leaders$Site.Num <- str_sub(CandN.Leaders$Site.Trt.Code, start=2, end=2)
+CandN.Leaders$Plot.Code <- str_sub(CandN.Leaders$Site.Trt.Code, start=3, end=3)
+CandN.Leaders$Trt.Code <- str_sub(CandN.Leaders$Site.Trt.Code, start=5, end=5)
+```
+
+
+Move sagebrush number and size to separate columns:
+
+```{r}
+CandN.Leaders$Sage.Size <- str_sub(CandN.Leaders$Site.Trt.Code, start=7, end=7)
+CandN.Leaders$Sagebrush.Num <- str_sub(CandN.Leaders$Site.Trt.Code, start=8, end=8)
+```
+
+
+Remove sagebrush number from Site/Treatment Code
+
+```{r}
+CandN.Leaders$Site.Trt.Code <- str_sub(CandN.Leaders$Site.Trt.Code, start=1, end=5)
+
+unique(CandN.Leaders[, "Site.Trt.Code"]) #45 unique site/treatment codes
+```
+
+
+Re-order columns:
+
+```{r}
+CandN.Leaders <- CandN.Leaders[,c(1,8:14,7,2:6)]
+```
+
+
+Check structure and data classes:
+
+```{r}
+str(CandN.Leaders)
+```
+
+
+Check all columns for NAs and data range:
+
+```{r}
+summary(CandN.Leaders)
+```
+
+
+Check for incorrect category labels:
+
+```{r}
+lapply(CandN.Leaders[,1:9], function(x) length(unique(x))) 
+
+#45 ID codes, 15 site IDs, three ranches, two sites, three plot codes, three treatment codes, three sagebrush sizes, two sagebrush numbers, and two reps (in some cases to check quality on combustion analyses).
+```
+
+
+Check frequency distribution:
+
+```{r}
+ggplot(gather(CandN.Leaders, key="Measurement", value="Value", d15N:C.N_ratio), aes(Value)) + 
+    geom_histogram() + 
+    facet_wrap(~Measurement, scales = 'free_x')
+```
+
+
+Check for outliers:
+
+```{r}
+ggplot(gather(CandN.Leaders, key="Measurement", value="Value", d15N:C.N_ratio), aes(x=Trt.Code, y=Value)) + 
+  geom_boxplot() +
+  facet_wrap(~Measurement, scales = 'free')
+```
+
+
+*Leader combustion data appears clean with no concerns about data entry errors.*
+
+\pagebreak
+
+
+
+## Infloresence Length
+
+Remove last four columns:
+
+```{r}
+Length.Inflor <- Length.Inflor[,1:(ncol(Length.Inflor)-4)]
+```
+
+
+Remove columns with ranch code, treatment, and year:
+
+```{r}
+Length.Inflor <- Length.Inflor[,-c(2:3,7)]
+```
+
+
+Remove "E" in site/treatment code and in the stand-alone treatment code:
+
+```{r}
+Length.Inflor$Site.Trt.ID <- gsub("EC", "C", Length.Inflor$Site.Trt.ID)
+Length.Inflor$Site.Trt.ID <- gsub("EH", "H", Length.Inflor$Site.Trt.ID)
+Length.Inflor$Site.Trt.ID <- gsub("EN", "N", Length.Inflor$Site.Trt.ID)
+
+Length.Inflor$Trt.Code <- gsub("EC", "C", Length.Inflor$Trt.Code)
+Length.Inflor$Trt.Code <- gsub("EH", "H", Length.Inflor$Trt.Code)
+Length.Inflor$Trt.Code <- gsub("EN", "N", Length.Inflor$Trt.Code)
+```
+
+
+Alter column name to match standard:
+
+```{r}
+colnames(Length.Inflor) <- c("Site.Trt.Code", "Ranch.Code", "Site.Num", "Plot.Code", "Trt.Code", "Sage.Size", "Sagebrush.Num", "Inflor.Num", "Inflor.Length_cm")
+```
+
+
+Add Site ID column:
+
+```{r}
+Length.Inflor$Site.ID <- str_sub(Length.Inflor$Site.Trt.Code, start=1, end=3)
+```
+
+
+Re-order columns:
+
+```{r}
+Length.Inflor <- Length.Inflor[,c(1,10,2:9)]
+```
+
+
+Check structure and data classes:
+
+```{r}
+str(Length.Inflor)
+```
+
+
+Check all columns for NAs and data range:
+
+```{r}
+summary(Length.Inflor) #4 NAs found
+```
+
+
+Display rows with NAs in infloresnce length. Confirm missing in raw data:
+
+```{r}
+Length.Inflor[which(is.na(Length.Inflor$Inflor.Length_cm)), c(1,7:10)]
+```
+
+*NAs accurately reflect a lack of collected data.*
+
+
+Check for incorrect category labels:
+
+```{r}
+lapply(Length.Inflor[,1:9], function(x) length(unique(x))) 
+
+#45 site/treatment codes, 15 site IDs, three ranches, two sites, three plot codes, three treatment codes, three sagebrush sizes, two sagebrush numbers, and five inflorences per sagebrush/size combinations.
+
+#Note: originally one site, P1C had been labelled as P1A, and was caught at this step.
+```
+
+
+Check frequency distribution:
+
+```{r}
+ggplot(gather(Length.Inflor, key="Measurement", value="Value", Inflor.Length_cm), aes(Value)) + 
+    geom_histogram()
+```
+
+
+Check for outliers:
+
+```{r}
+ggplot(gather(Length.Inflor, key="Measurement", value="Value", Inflor.Length_cm), aes(x=Trt.Code, y=Value)) + 
+  geom_boxplot() +
+  facet_wrap(~Sage.Size, scales = 'free')
+```
+
+
+*Infloresence length data appears clean and ready for analysis.*
+
+\pagebreak
+
+
+
+## Leader Length
+
+Remove columns with year, date, field tech, ranch, treatment, and tray number:
+
+```{r}
+Length.Leader <- Length.Leader[,-c(2:5,9,14)]
+```
+
+
+Alter column name to match standard:
+
+```{r}
+colnames(Length.Leader) <- c("Site.Trt.Code", "Ranch.Code", "Site.Num", "Plot.Code", "Trt.Code", "Sage.Size", "Sagebrush.Num", "Leader.Num", "Leader.Length_cm", "Wet.Mass_g", "Dry.Mass_g", "Moisture.Content_per", "Dry.Density_g.cm")
+```
+
+
+Remove sagebrush size and number from site/treatment code:
+
+```{r}
+Length.Leader$Site.Trt.Code <- str_sub(Length.Leader$Site.Trt.Code, start=1, end=5)
+
+```
+
+
+Add Site ID column:
+
+```{r}
+Length.Leader$Site.ID <- str_sub(Length.Leader$Site.Trt.Code, start=1, end=3)
+```
+
+
+Re-order columns:
+
+```{r}
+Length.Leader <- Length.Leader[,c(1,14,2:13)]
+```
+
+
+Remove moisture content and dry density columns as they are calculated. These calculations will be redone during analysis:
+
+```{r}
+Length.Leader <- Length.Leader[,-c(13:14)]
+```
+
+
+Check structure and data classes:
+
+```{r}
+str(Length.Leader)
+```
+
+
+Check all columns for NAs and data range:
+
+```{r}
+summary(Length.Leader)
+```
+
+
+Check for incorrect category labels:
+
+```{r}
+lapply(Length.Leader[,1:9], function(x) length(unique(x))) 
+
+#45 site/treatment codes, 15 site IDs, three ranches, two sites, three plot codes, three treatment codes, three sagebrush sizes, two sagebrush numbers, and five leaders per sagebrush/size combinations.
+```
+
+
+Check frequency distribution:
+
+```{r}
+ggplot(gather(Length.Leader, key="Measurement", value="Value", Leader.Length_cm), aes(Value)) + 
+    geom_histogram()
+```
+
+
+Check for outliers:
+
+```{r}
+ggplot(gather(Length.Leader, key="Measurement", value="Value", Leader.Length_cm), aes(x=Trt.Code, y=Value)) + 
+  geom_boxplot()  +
+  facet_wrap(~Sage.Size, scales = 'free')
+```
+
+
+*Leader length data appears clean and ready for analysis.*
+
+\pagebreak
+
+
+
+## Plant/Vegetation Community
+
+Remove columns with date, field tech, ranch, genus, and species:
+
+```{r}
+Veg.Com <- Veg.Com[,-c(2:4,11:12)]
+```
+
+
+Alter column name to match standard:
+
+```{r}
+colnames(Veg.Com) <- c("Site.Trt.Code", "Ranch.Code", "Site.Num", "Plot.Code", "Trt.Code", "Daubenmire.Num", "Species.Code", "Canopy.Class", "Canopy.Cover.Range_per", "Canopy.Cover.Midpoint_per")
+```
+
+
+Add Site ID column:
+
+```{r}
+Veg.Com$Site.ID <- str_sub(Veg.Com$Site.Trt.Code, start=1, end=3)
+```
+
+
+Re-order columns:
+
+```{r}
+Veg.Com <- Veg.Com[,c(1,11,2:10)]
+```
+
+
+Check structure and data classes:
+
+```{r}
+str(Veg.Com)
+```
+
+
+Check all columns for NAs and data range:
+
+```{r}
+summary(Veg.Com)
+```
+
+
+Check for incorrect category labels:
+
+```{r}
+lapply(Veg.Com[,c(1:6, 9:11)], function(x) length(unique(x))) 
+
+#42 site/treatment codes, 14 site IDs, three ranches, two sites, three plot codes, three treatment codes, and seven canopy classes (looked at three different ways).
+
+#NOTE: One of the Botur sites was too wet to enter during vegetation sampling. This is the cause of 3 less treatment/site codes, and one less site.
+```
+
+
+Check that species codes are accurate:
+
+```{r}
+sort(unique(Veg.Com$Species.Code)) 
+
+#remove white space for CAFI
+#check on OZHY
+```
+
+
+Remove whitespace from end of CAFI:
+
+```{r}
+Veg.Com$Species.Code <- trimws(Veg.Com$Species.Code, which="right")
+
+sort(unique(Veg.Com$Species.Code)) 
+```
+
+
+Check OZHY coding in original data sheets:
+
+```{r}
+Veg.Com[c(which(Veg.Com$Species.Code=="OZHY")), c(1,7:9)]
+```
+
+OZHY should be ORHY (i.e. typo), per scanned field data sheets:
+
+```{r}
+Veg.Com$Species.Code <- gsub("OZHY", "ORHY", Veg.Com$Species.Code)
+
+sort(unique(Veg.Com$Species.Code))
+```
+
+
+Convert ARTR Wy and ARTR Wy/M to just "ARTR":
+
+```{r}
+Veg.Com$Species.Code <- gsub("ARTR Wy", "ARTR", Veg.Com$Species.Code)
+Veg.Com$Species.Code <- gsub("ARTR/M", "ARTR", Veg.Com$Species.Code) #slightly modified coding for ARTR Wy/M, as it is changed by first line in this chunk.
+
+sort(unique(Veg.Com$Species.Code))
+```
+
+
+*Plant community data appears clean and ready for analysis.*
+
+\pagebreak
+
+
+
+## Trace Gas
+
+Remove refernce, date, year, sample analyzed, time stamp, vial number columns, ranch name, and . They are only needed for connecting to physical sample analysis sheets:
+
+```{r}
+TGas.13 <- TGas.13[,-c(1:2,4:8,16)]
+
+colnames(TGas.13)
+```
+
+
+Alter column names to match standard:
+
+```{r}
+colnames(TGas.13) <- c("Date.ABV", "Ranch.Code", "Site.Num", "Plot.Code", "Site.ID", "Trt.Code", "Site.Trt.Code", "Collar.Num", "Collar.ID", "Time.Elapsed_min", "Sample.ID", "Start.Temp_F", "End.Temp_F", "Chamber.Height.1_cm", "Chamber.Height.2_cm", "Chamber.Height.3_cm", "CH4_ppm", "CO2_ppm", "N2O_ppm")
+```
+
+
+Remove the "E" from treatment codes:
+
+```{r}
+TGas.13$Sample.ID <- gsub(" EC", "-C", TGas.13$Sample.ID)
+TGas.13$Sample.ID <- gsub(" EH", "-H", TGas.13$Sample.ID)
+TGas.13$Sample.ID <- gsub(" EN", "-N", TGas.13$Sample.ID)
+
+TGas.13$Site.Trt.Code <- gsub(" EC", "-C", TGas.13$Site.Trt.Code)
+TGas.13$Site.Trt.Code <- gsub(" EH", "-H", TGas.13$Site.Trt.Code)
+TGas.13$Site.Trt.Code <- gsub(" EN", "-N", TGas.13$Site.Trt.Code)
+
+TGas.13$Collar.ID <- gsub(" EC", "-C.", TGas.13$Collar.ID)
+TGas.13$Collar.ID <- gsub(" EH", "-H.", TGas.13$Collar.ID)
+TGas.13$Collar.ID <- gsub(" EN", "-N.", TGas.13$Collar.ID)
+```
+
+
+Re-order columns:
+
+```{r}
+TGas.13 <- TGas.13[,c(11,1,9,7,5,2:4,6,8,10,12:19)]
+```
+
+
+Remove empty rows at bottom of data frame:
+
+```{r}
+TGas.13 <- TGas.13[-c(541:576),]
+```
+
+
+Check for incorrect category labels:
+
+```{r}
+lapply(TGas.13[,1:11], function(x) length(unique(x))) 
+
+#540 individual samples, two sampling dates, 90 collar IDs, 45 site/treatment codes, 15 site IDs, three ranch codes, two sites, three plot codes, three treatment codes, two collars per treatment, and three timeframes/elapsed time.
+```
+
+
+Check structure and data classes:
+
+```{r}
+str(TGas.13)
+```
+
+
+Check all columns for NAs and data range:
+
+```{r}
+summary(TGas.13)
+```
+
+Check for outliers:
+
+```{r}
+ggplot(gather(TGas.13, key="Measurement", value="Value", CH4_ppm:N2O_ppm), aes(x=Trt.Code, y=Value)) + 
+  geom_boxplot()  +
+  facet_wrap(~Measurement, scales = 'free')
+```
+
+
+*While highly variable, trace gas data appears clean and ready for analysis.*
+
+\pagebreak
+
+
+
+## Write cleaned data frames to CSV
+
+```{r, run=F}
+write.csv(CandN.Hay, file="CSV_Cleaned/Beltz_2018_Sagebrush.N.Fertilization_CandN.Hay_CLEAN.csv", row.names = F)
+
+write.csv(CandN.Leaders, file="CSV_Cleaned/Beltz_2018_Sagebrush.N.Fertilization_CandN.Leaders_CLEAN.csv", row.names = F)
+
+write.csv(Length.Inflor, file="CSV_Cleaned/Beltz_2018_Sagebrush.N.Fertilization_Inflor.Length_CLEAN.csv", row.names = F)
+
+write.csv(Length.Leader, file="CSV_Cleaned/Beltz_2018_Sagebrush.N.Fertilization_Leader.Length_CLEAN.csv", row.names = F)
+
+write.csv(SoilN_all, file="CSV_Cleaned/Beltz_2018_Sagebrush.N.Fertilization_Soil.N_CLEAN.csv", row.names = F)
+
+write.csv(Text.Soil, file="CSV_Cleaned/Beltz_2018_Sagebrush.N.Fertilization_Soil.Texture_CLEAN.csv", row.names = F)
+
+write.csv(TGas.13, file="CSV_Cleaned/Beltz_2018_Sagebrush.N.Fertilization_Trace.Gas.13_CLEAN.csv", row.names = F)
+
+write.csv(Veg.Com, file="CSV_Cleaned/Beltz_2018_Sagebrush.N.Fertilization_Plant.Community_CLEAN.csv", row.names = F)
+```
+
+
+
+
