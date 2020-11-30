@@ -2,7 +2,7 @@
 
 - **Contributors**: Christopher W. Beltz
 - **Contact**: christopher.beltz@yale.edu
-- **License**: MIT
+- **License**: [MIT License](https://opensource.org/licenses/MIT)
 - [Package source code on Github](https://github.com/cwbeltz/Nitrogen-Fertilization-in-Sagebrush-PUB2019)
 
 This repository host the code for analyses presented in the 2019 PLOS article. The article can be found at https://doi.org/10.1371/journal.pone.0206563.
